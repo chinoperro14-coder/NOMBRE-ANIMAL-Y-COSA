@@ -86,7 +86,7 @@ function norm(w){
     .normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/\u0001/g,"ñ")
     .replace(/[^a-zñ0-9 ]/g,"").replace(/\s+/g," ").trim();
 }
-const DEFAULT_CATS = ["Nombre","Animal","Cosa","Color","Fruta","País","Marca","Almacén","TV"];
+const DEFAULT_CATS = ["Nombre","Apellido","Animal","Cosa","Color","Fruta","País","Marca","Almacén","TV"];
 const DEFAULT_LETTERS = "ABCDEFGHIJLMNOPRSTUVZ";
 
 /* ============ Transporte (PeerJS en línea, BroadcastChannel en modo local) ============ */

@@ -8,6 +8,9 @@ Juego multijugador en línea tipo "Basta / Stop". Un jugador crea una sala, comp
 3. El anfitrión elige categorías, tiempo y reglas, y toca **Empezar ronda**.
 4. Cualquiera puede decir **¡Basta!** cuando haya llenado todas las categorías.
 
+## Categorías
+Nombre, Animal, Cosa, Color, Fruta, País, Marca, Almacén y TV (el anfitrión puede cambiarlas).
+
 ## Puntos
 - Palabra única: 100. Repetida: 50, 25, 12.5… (o 100 entre N, según el anfitrión).
 - Vacía, con otra letra, fuera de la lista de palabras o rechazada por votos: 0.

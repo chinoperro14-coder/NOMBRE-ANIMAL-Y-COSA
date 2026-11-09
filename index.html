@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Nombre, Animal y Cosa</title>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="palabras.js"></script>
+<style>
+:root{
+  --bg:#fff7ec; --card:#ffffff; --ink:#2b2118; --muted:#7a6a5c; --line:#ecdcc8;
+  --accent:#ff6b35; --accent-ink:#fff; --ok:#1f9d55; --bad:#d64545; --shared:#e0a100;
+  --soft:#fff0dc;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#1b1612; --card:#26201a; --ink:#f5ece2; --muted:#b5a594; --line:#3a3027;
+    --accent:#ff7d4d; --accent-ink:#1b1612; --ok:#4ccf86; --bad:#ff7070; --shared:#ffc940; --soft:#30281f;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#1b1612; --card:#26201a; --ink:#f5ece2; --muted:#b5a594; --line:#3a3027;
+  --accent:#ff7d4d; --accent-ink:#1b1612; --ok:#4ccf86; --bad:#ff7070; --shared:#ffc940; --soft:#30281f;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:720px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:28px;margin:8px 0 4px;letter-spacing:-.5px}
+h2{font-size:20px;margin:0 0 12px}
+p{margin:6px 0}
+.muted{color:var(--muted)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px;margin:14px 0}
+label{display:block;font-weight:600;margin:10px 0 4px}
+input,select,textarea{width:100%;font:inherit;color:var(--ink);background:var(--bg);border:1.5px solid var(--line);border-radius:10px;padding:10px 12px}
+input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent)}
+button{font:inherit;font-weight:700;border:0;border-radius:12px;padding:12px 18px;cursor:pointer;background:var(--accent);color:var(--accent-ink)}
+button.sec{background:var(--soft);color:var(--ink);border:1px solid var(--line)}
+button:disabled{opacity:.45;cursor:not-allowed}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.row>*{flex:1 1 auto}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
+.chip{background:var(--soft);border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:14px}
+.chip b{color:var(--accent)}
+.code{font:700 28px/1 ui-monospace,Menlo,monospace;letter-spacing:4px}
+.letter{font:800 96px/1 system-ui;color:var(--accent);text-align:center;margin:4px 0}
+.timer{font:700 22px/1 ui-monospace,monospace;text-align:center}
+.timer.low{color:var(--bad)}
+.answers .f{margin-bottom:8px}
+.answers input.bad{border-color:var(--bad)}
+table{width:100%;border-collapse:collapse;font-size:15px}
+th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:13px;color:var(--muted);font-weight:600}
+.scroll{overflow-x:auto}
+.pts{font-weight:700;white-space:nowrap}
+.p100{color:var(--ok)} .pshare{color:var(--shared)} .p0{color:var(--bad)}
+.ans{cursor:default}
+.host .ans.click{cursor:pointer;text-decoration:underline dotted}
+.ans.void{text-decoration:line-through;color:var(--muted)}
+.rank li{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line)}
+.rank{list-style:none;padding:0;margin:0}
+.banner{background:var(--soft);border:1px dashed var(--accent);border-radius:12px;padding:10px 12px;font-size:14px}
+.err{color:var(--bad);font-weight:600}
+.hidden{display:none!important}
+.vote{display:flex;gap:4px;margin-top:4px}
+.vote button{padding:3px 8px;font-size:13px;border-radius:8px;background:var(--soft);color:var(--ink);border:1px solid var(--line);font-weight:600}
+.vote button.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.tag{font-size:12px}
+.warn{color:var(--bad);font-weight:700}
+</style>
+</head>
+<body>
+<main id="app"></main>
+<script>
+"use strict";
+/* ============ Utilidades ============ */
+const $ = (s, el=document) => el.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const params = new URLSearchParams(location.search);
+const LOCAL = params.get("modo") === "local";           // modo de prueba: varias pestañas del mismo navegador
+const store = { get(k){ try{return localStorage.getItem(k)}catch(e){return null} }, set(k,v){ try{localStorage.setItem(k,v)}catch(e){} } };
+const rid = n => Array.from(crypto.getRandomValues(new Uint8Array(n)), b => "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"[b%32]).join("");
+
+// Normaliza para comparar: minúsculas, sin acentos (conserva la ñ), sin espacios extra.
+function norm(w){
+  return String(w||"").trim().toLowerCase().replace(/ñ/g,"\u0001")
+    .normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/\u0001/g,"ñ")
+    .replace(/[^a-zñ0-9 ]/g,"").replace(/\s+/g," ").trim();
+}
+const DEFAULT_CATS = ["Nombre","Apellido","Animal","Cosa","Fruta o verdura","País o ciudad","Color","Profesión u oficio","Comida","Marca"];
+const DEFAULT_LETTERS = "ABCDEFGHIJLMNOPRSTUVZ";
+
+/* ============ Transporte (PeerJS en línea, BroadcastChannel en modo local) ============ */
+const PREFIX = "nombre-animal-cosa-v1-";
+function hostTransport(code, h){
+  if (LOCAL){
+    const bc = new BroadcastChannel(PREFIX+code);
+    bc.onmessage = e => { const m=e.data; if(m.to==="host") { if(m.msg.t==="hello") h.onConnect(m.from); h.onMessage(m.from, m.msg); } };
+    setTimeout(h.onReady, 0);
+    return { send:(to,msg)=>bc.postMessage({to,msg}), close:()=>bc.close() };
+  }
+  if (!window.Peer){ setTimeout(()=>h.onError("No se pudo cargar la conexión (PeerJS). Revisa tu internet."),0); return {send(){},close(){}}; }
+  const peer = new Peer(PREFIX+code);
+  const conns = new Map();
+  peer.on("open", h.onReady);
+  peer.on("error", e => h.onError(e.type==="unavailable-id" ? "Ese código de sala ya está en uso." : "Error de conexión: "+e.type));
+  peer.on("connection", c => {
+    c.on("open", () => { conns.set(c.peer, c); h.onConnect(c.peer); });
+    c.on("data", msg => h.onMessage(c.peer, msg));
+    c.on("close", () => { conns.delete(c.peer); h.onDisconnect && h.onDisconnect(c.peer); });
+  });
+  return { send:(to,msg)=>{ const c=conns.get(to); if(c&&c.open) c.send(msg); }, close:()=>peer.destroy() };
+}
+function clientTransport(code, h){
+  if (LOCAL){
+    const me = "c-"+rid(8);
+    const bc = new BroadcastChannel(PREFIX+code);
+    bc.onmessage = e => { if(e.data.to===me || e.data.to==="*") h.onMessage(e.data.msg); };
+    setTimeout(h.onReady, 0);
+    return { send: msg => bc.postMessage({to:"host", from:me, msg}) };
+  }
+  if (!window.Peer){ setTimeout(()=>h.onError("No se pudo cargar la conexión (PeerJS). Revisa tu internet."),0); return {send(){}}; }
+  const peer = new Peer();
+  let conn = null;
+  peer.on("open", () => {
+    conn = peer.connect(PREFIX+code, {reliable:true});
+    conn.on("open", h.onReady);
+    conn.on("data", h.onMessage);
+    conn.on("close", () => h.onError("Se perdió la conexión con el anfitrión."));
+  });
+  peer.on("error", e => h.onError(e.type==="peer-unavailable" ? "No existe esa sala o el anfitrión cerró el juego." : "Error de conexión: "+e.type));
+  return { send: msg => { if(conn && conn.open) conn.send(msg); } };
+}
+
+/* ============ Puntuación ============ */
+// modo "mitad": 1→100, 2→50, 3→25, 4→12.5…   modo "dividir": 100/N (2→50, 3→33)
+function pointsFor(n, mode){
+  if (n<=0) return 0;
+  const p = mode==="dividir" ? 100/n : 100/Math.pow(2,n-1);
+  return Math.round(p*10)/10;
+}
+/* ---------- Verificador ---------- */
+const LISTS = {};
+Object.entries(window.PALABRAS||{}).forEach(([k,v]) => LISTS[k] = new Set(v.split(",").map(norm).filter(Boolean)));
+// Qué lista corresponde a cada categoría (por palabras clave en su nombre). Sin lista = categoría libre.
+function listFor(cat){
+  const c = norm(cat);
+  if (/apellido/.test(c)) return null;
+  if (/nombre/.test(c)) return "nombres";
+  if (/animal/.test(c)) return "animales";
+  if (/fruta|verdura/.test(c)) return "frutas";
+  if (/pais|ciudad|lugar/.test(c)) return "lugares";
+  if (/color/.test(c)) return "colores";
+  if (/profesion|oficio|trabajo/.test(c)) return "profesiones";
+  if (/comida|platillo|plato/.test(c)) return "comidas";
+  return null;
+}
+function lev(a,b,max){
+  if (Math.abs(a.length-b.length)>max) return max+1;
+  let prev=Array.from({length:b.length+1},(_,i)=>i);
+  for(let i=1;i<=a.length;i++){ const cur=[i]; let best=i;
+    for(let j=1;j<=b.length;j++){ cur[j]=Math.min(prev[j]+1,cur[j-1]+1,prev[j-1]+(a[i-1]===b[j-1]?0:1)); best=Math.min(best,cur[j]); }
+    if(best>max) return max+1; prev=cur; }
+  return prev[b.length];
+}
+// Devuelve {status:"ok"|"dudosa"|"libre", suggest}
+const checkCache = {};
+function checkWord(cat, n){
+  const key=cat+"|"+n; if (checkCache[key]) return checkCache[key];
+  const lk = listFor(cat); let r;
+  if (!lk || !LISTS[lk]) r = {status:"libre"};
+  else {
+    const set = LISTS[lk];
+    const forms = [n, n.replace(/es$/,""), n.replace(/s$/,""), n.split(" ")[0]];
+    if (forms.some(f => f && set.has(f))) r = {status:"ok"};
+    else {
+      let suggest=null, bestD=9; const max = n.length>=7?2:1;
+      for (const w of set){ if (w[0]!==n[0]) continue; const d=lev(n,w,max); if(d<=max && d<bestD){ bestD=d; suggest=w; } }
+      r = {status:"dudosa", suggest};
+    }
+  }
+  return checkCache[key]=r;
+}
+/* ---------- Puntuación ---------- */
+// Regla: palabra de la lista = válida salvo que la mayoría vote en contra.
+// Palabra que no está en la lista (mal escrita, inventada o de otra categoría) = 0 salvo que la mayoría la apruebe.
+// Categorías sin lista (Apellido, Cosa, Marca…) = válidas salvo que la mayoría vote en contra.
+function scoreRound(round, playerIds, mode, penalize){
+  const L = norm(round.letter);
+  const res = {}; playerIds.forEach(p => res[p] = {total:0, cells:{}, left:(round.leaves||{})[p]||0});
+  round.cats.forEach(cat => {
+    const groups = {};
+    playerIds.forEach(p => {
+      const raw = (round.answers[p]||{})[cat] || "";
+      const n = norm(raw);
+      const v = (round.votes||{})[p+"|"+cat] || {};
+      const up = Object.values(v).filter(x=>x>0).length, down = Object.values(v).filter(x=>x<0).length;
+      let why = "", chk = null;
+      if (!n) why = "vacía";
+      else if (!n.startsWith(L)) why = "no empieza con "+round.letter;
+      else if (penalize && res[p].left) why = "salió del juego";
+      else {
+        chk = checkWord(cat, n);
+        if (chk.status==="dudosa" && !(up>down)) why = chk.suggest ? "¿quisiste decir “"+chk.suggest+"”?" : "no está en la lista";
+        else if (chk.status!=="dudosa" && down>up) why = "rechazada por votos";
+      }
+      res[p].cells[cat] = {raw, n, why, pts:0, count:0, status: chk?chk.status:null, up, down, my:null};
+      if (!why) (groups[n] = groups[n] || []).push(p);
+    });
+    Object.values(groups).forEach(ps => ps.forEach(p => {
+      const c = res[p].cells[cat]; c.count = ps.length; c.pts = pointsFor(ps.length, mode); res[p].total += c.pts;
+    }));
+  });
+  playerIds.forEach(p => res[p].total = Math.round(res[p].total*10)/10);
+  return res;
+}
+
+/* ============ Estado de la app ============ */
+const S = {
+  role: null,           // "host" | "client"
+  code: null, myId: null, myName: store.get("nac-name") || "",
+  view: null,           // estado público recibido del anfitrión
+  myAnswers: {}, endAt: 0, error: "",
+};
+let net = null;
+
+/* ---------- Lógica del ANFITRIÓN ---------- */
+const H = {
+  players: {},          // pid -> {name, conn}
+  order: [],
+  settings: { cats: DEFAULT_CATS.slice(), seconds: 60, letters: DEFAULT_LETTERS, mode: "mitad", bastaNeedsAll: true, penalize: true },
+  phase: "lobby",       // lobby | playing | closing | review | final
+  rounds: [],           // terminadas: {letter,cats,answers,votes,leaves}
+  cur: null,            // ronda actual
+  usedLetters: [],
+  connOf: {},           // conn -> pid
+  timer: null, bastaBy: null,
+};
+function hostStart(){
+  S.role="host"; S.code = rid(5); S.myId = "host";
+  H.players.host = {name: S.myName}; H.order=["host"];
+  net = hostTransport(S.code, {
+    onReady(){ hostBroadcast(); },
+    onError(m){ S.error=m; render(); },
+    onConnect(){},
+    onDisconnect(conn){ const pid=H.connOf[conn]; if(pid&&H.players[pid]) { H.players[pid].online=false; hostBroadcast(); } },
+    onMessage(conn, msg){ hostHandle(conn, msg); },
+  });
+  render();
+}
+function hostHandle(conn, msg){
+  if (msg.t==="hello"){
+    let pid = msg.pid && H.players[msg.pid] ? msg.pid : null;
+    if (!pid){
+      if (H.phase!=="lobby" && H.phase!=="review"){ /* se permite entrar a mitad: jugará desde la siguiente ronda */ }
+      pid = msg.pid || ("p-"+rid(6));
+      H.players[pid] = {name: String(msg.name||"Jugador").slice(0,24)};
+      H.order.push(pid);
+    }
+    H.players[pid].online = true; H.players[pid].conn = conn; H.connOf[conn]=pid;
+    if (msg.name) H.players[pid].name = String(msg.name).slice(0,24);
+    net.send(conn, {t:"welcome", pid});
+    hostBroadcast(); return;
+  }
+  const pid = H.connOf[conn]; if (!pid) return;
+  hostAction(pid, msg);
+}
+function hostAction(pid, msg){
+  if (msg.t==="answers" && H.cur && (H.phase==="playing"||H.phase==="closing")){
+    H.cur.answers[pid] = sanitizeAnswers(msg.a);
+  } else if (msg.t==="basta" && H.phase==="playing"){
+    if (msg.a) H.cur.answers[pid] = sanitizeAnswers(msg.a);
+    H.bastaBy = pid; hostClose();
+  } else if (msg.t==="left" && H.cur && H.phase==="playing" && H.cur.players.includes(pid)){
+    H.cur.leaves[pid] = (H.cur.leaves[pid]||0) + 1; hostBroadcast();
+  } else if (msg.t==="vote" && H.phase==="review"){
+    hostVote(pid, msg.p, msg.c, msg.v);
+  }
+}
+function sanitizeAnswers(a){ const o={}; (H.cur?H.cur.cats:[]).forEach(c=>{ o[c]=String((a||{})[c]||"").slice(0,40) }); return o; }
+function hostNewRound(){
+  const pool = H.settings.letters.toUpperCase().replace(/[^A-ZÑ]/g,"").split("");
+  let avail = pool.filter(l=>!H.usedLetters.includes(l));
+  if (!avail.length){ H.usedLetters=[]; avail=pool; }
+  const letter = avail[Math.floor(Math.random()*avail.length)];
+  H.usedLetters.push(letter);
+  H.cur = {letter, cats:H.settings.cats.slice(), answers:{}, votes:{}, leaves:{}, players: H.order.filter(p=>H.players[p].online!==false)};
+  H.phase="playing"; H.bastaBy=null;
+  H.cur.endAt = Date.now() + H.settings.seconds*1000;
+  clearInterval(H.timer);
+  H.timer = setInterval(()=>{ if (H.phase==="playing" && Date.now()>=H.cur.endAt) hostClose(); }, 250);
+  S.myAnswers = {};
+  hostBroadcast();
+}
+function hostClose(){
+  if (H.phase!=="playing") return;
+  H.phase="closing"; clearInterval(H.timer);
+  H.cur.answers.host = sanitizeAnswers(S.myAnswers);
+  hostBroadcast();                                   // los clientes mandan su versión final
+  setTimeout(()=>{ H.rounds.push(H.cur); H.phase="review"; hostBroadcast(); }, 1500);
+}
+function hostVote(voter, owner, cat, v){
+  const r = H.rounds[H.rounds.length-1]; if(!r || voter===owner || !r.players.includes(voter) || !r.cats.includes(cat)) return;
+  const k = owner+"|"+cat; r.votes[k] = r.votes[k] || {};
+  if (v===1 || v===-1) r.votes[k][voter]=v; else delete r.votes[k][voter];
+  hostBroadcast();
+}
+function hostPublic(){
+  const ids = H.order;
+  const results = H.rounds.map(r => ({letter:r.letter, cats:r.cats, players:r.players, votes:r.votes, leaves:r.leaves, score: scoreRound(r, r.players, H.settings.mode, H.settings.penalize)}));
+  const totals = {}; ids.forEach(p=>totals[p]=0);
+  results.forEach(r => Object.entries(r.score).forEach(([p,v])=> totals[p]=Math.round(((totals[p]||0)+v.total)*10)/10));
+  return {
+    code:S.code, phase:H.phase, settings:H.settings,
+    players: ids.map(p=>({id:p, name:H.players[p].name, online:H.players[p].online!==false, total:totals[p]||0})),
+    cur: H.cur && (H.phase==="playing"||H.phase==="closing") ? {letter:H.cur.letter, cats:H.cur.cats, remaining:Math.max(0,H.cur.endAt-Date.now()), players:H.cur.players, leaves:H.cur.leaves} : null,
+    last: results.length ? results[results.length-1] : null,
+    roundNo: H.rounds.length + (H.phase==="playing"||H.phase==="closing"?1:0),
+    bastaBy: H.bastaBy ? (H.players[H.bastaBy]||{}).name : null,
+  };
+}
+function hostBroadcast(){
+  const pub = hostPublic();
+  Object.values(H.players).forEach(p => { if (p.conn && p.online) net.send(p.conn, {t:"state", s:pub}); });
+  receiveState(pub);
+}
+
+/* ---------- Lógica del JUGADOR ---------- */
+function clientJoin(code){
+  S.role="client"; S.code=code.toUpperCase().trim(); S.error="";
+  const savedPid = LOCAL ? null : store.get("nac-pid-"+S.code);
+  net = clientTransport(S.code, {
+    onReady(){ net.send({t:"hello", name:S.myName, pid:savedPid}); },
+    onError(m){ S.error=m; render(); },
+    onMessage(msg){
+      if (msg.t==="welcome"){ S.myId=msg.pid; store.set("nac-pid-"+S.code, msg.pid); }
+      if (msg.t==="state") receiveState(msg.s);
+    },
+  });
+  render();
+}
+function receiveState(s){
+  const prev = S.view;
+  S.view = s;
+  if (s.cur){
+    S.endAt = Date.now() + s.cur.remaining;
+    if (!prev || !prev.cur || prev.cur.letter!==s.cur.letter || prev.roundNo!==s.roundNo){ S.myAnswers = {}; }
+  }
+  if (s.phase==="closing" && S.role==="client") net.send({t:"answers", a:S.myAnswers});
+  render();
+}
+let sendT=null;
+function onType(cat, val){
+  S.myAnswers[cat]=val;
+  if (S.role==="client"){ clearTimeout(sendT); sendT=setTimeout(()=>net.send({t:"answers", a:S.myAnswers}), 300); }
+  updateBasta();
+}
+// Anti-trampa: si el jugador cambia de pestaña o de app durante la ronda, se avisa al anfitrión.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState!=="hidden" || lastScreen!=="playing" || !S.view || !S.view.cur || !S.view.cur.players.includes(S.myId)) return;
+  if (S.role==="host"){ if(H.phase==="playing"){ H.cur.leaves.host=(H.cur.leaves.host||0)+1; hostBroadcast(); } }
+  else net.send({t:"left"});
+});
+function sayBasta(){
+  if (S.role==="host") { H.cur.answers.host = sanitizeAnswers(S.myAnswers); H.bastaBy="host"; hostClose(); }
+  else net.send({t:"basta", a:S.myAnswers});
+}
+
+/* ============ Interfaz ============ */
+const app = $("#app");
+let lastScreen = "";
+function render(){
+  const s = S.view;
+  let screen;
+  if (!S.role) screen="home";
+  else if (S.error && !s) screen="error";
+  else if (!s) screen="connecting";
+  else screen = s.phase;
+  // No volver a pintar el formulario mientras se escribe (evita perder el foco)
+  if (screen==="playing" && lastScreen==="playing"){ updateTimer(); updatePlayersLine(); return; }
+  lastScreen = screen;
+  app.className = S.role==="host" ? "host" : "";
+  app.innerHTML = header() + ({home, error, connecting, lobby, playing, closing:playing, review, final:review}[screen])();
+  bind(screen);
+  if (screen==="playing") { updateTimer(); updateBasta(); }
+}
+function header(){
+  return `<h1>Nombre, Animal y Cosa</h1>`+
+    (S.view ? `<p class="muted">Sala <b>${esc(S.view.code)}</b> · Ronda ${S.view.roundNo||0}${S.role==="host"?" · Eres el anfitrión":""}</p>`:"")+
+    (S.error && S.view ? `<p class="err">${esc(S.error)}</p>`:"");
+}
+function home(){
+  const code = (params.get("sala")||"").toUpperCase();
+  return `
+  ${LOCAL?`<div class="banner">Modo de prueba local: abre varias pestañas de este navegador para simular jugadores.</div>`:""}
+  <div class="card">
+    <label for="name">Tu nombre</label>
+    <input id="name" maxlength="24" value="${esc(S.myName)}" placeholder="Ej. Miguel" autocomplete="off">
+  </div>
+  <div class="card">
+    <h2>Unirme a una sala</h2>
+    <div class="row"><input id="code" class="code" maxlength="5" value="${esc(code)}" placeholder="CÓDIGO"><button id="join" style="flex:0 0 auto">Entrar</button></div>
+  </div>
+  <div class="card">
+    <h2>Crear una sala nueva</h2>
+    <p class="muted">Tú eliges las categorías y el tiempo, y compartes el link con tus amigos.</p>
+    <button id="create">Crear sala</button>
+  </div>
+  <p id="msg" class="err"></p>`;
+}
+function error(){ return `<div class="card"><p class="err">${esc(S.error)}</p><button onclick="location.href=location.pathname+(LOCAL?'?modo=local':'')">Volver al inicio</button></div>`; }
+function connecting(){ return `<div class="card"><p>Conectando…</p></div>`; }
+function shareLink(){ return location.origin+location.pathname+"?"+(LOCAL?"modo=local&":"")+"sala="+S.view.code; }
+function playersBlock(){
+  return `<div class="chips">${S.view.players.map(p=>`<span class="chip">${esc(p.name)}${p.id===S.myId?" (tú)":""}${p.online?"":" · desconectado"}</span>`).join("")}</div>`;
+}
+function lobby(){
+  const s=S.view, st=s.settings, isHost=S.role==="host";
+  return `
+  <div class="card">
+    <h2>Invita a tus amigos</h2>
+    <p>Código de sala: <span class="code">${esc(s.code)}</span></p>
+    <div class="row"><input id="link" readonly value="${esc(shareLink())}"><button id="copy" class="sec" style="flex:0 0 auto">Copiar link</button></div>
+  </div>
+  <div class="card">
+    <h2>Jugadores (${s.players.length})</h2>
+    ${playersBlock()}
+  </div>
+  <div class="card">
+    <h2>Reglas</h2>
+    ${isHost ? `
+      <label for="cats">Categorías (una por línea)</label>
+      <textarea id="cats" rows="7">${esc(st.cats.join("\n"))}</textarea>
+      <div class="row">
+        <div><label for="secs">Tiempo por ronda</label>
+          <select id="secs">${[30,45,60,90,120,180].map(n=>`<option value="${n}" ${n==st.seconds?"selected":""}>${n} segundos</option>`).join("")}</select></div>
+        <div><label for="mode">Palabras repetidas</label>
+          <select id="mode">
+            <option value="mitad" ${st.mode==="mitad"?"selected":""}>Mitad cada vez (100, 50, 25, 12.5)</option>
+            <option value="dividir" ${st.mode==="dividir"?"selected":""}>Dividir entre todos (100, 50, 33, 25)</option>
+          </select></div>
+      </div>
+      <label for="pen">Si alguien sale del juego durante la ronda (cambia de app o pestaña)</label>
+      <select id="pen">
+        <option value="1" ${st.penalize?"selected":""}>Pierde todos los puntos de esa ronda</option>
+        <option value="0" ${!st.penalize?"selected":""}>Solo se avisa a todos</option>
+      </select>
+      <label for="letters">Letras posibles</label>
+      <input id="letters" value="${esc(st.letters)}">
+    ` : rulesText(st)}
+  </div>
+  ${isHost ? `<button id="start" style="width:100%">Empezar ronda</button>` : `<p class="muted" style="text-align:center">Esperando a que el anfitrión empiece…</p>`}`;
+}
+function rulesText(st){
+  return `<p><b>Categorías:</b> ${st.cats.map(esc).join(", ")}</p>
+    <p><b>Tiempo:</b> ${st.seconds} segundos, o hasta que alguien diga ¡Basta!</p>
+    <p><b>Puntos:</b> palabra única 100; repetida ${st.mode==="mitad"?"se divide a la mitad por cada jugador extra (50, 25, 12.5…)":"se divide entre quienes la tengan (50, 33, 25…)"}. Vacía o con otra letra: 0.</p>
+    <p><b>Verificador:</b> las palabras se revisan contra listas. Si no aparece (mal escrita, inventada o de otra categoría) vale 0, salvo que la mayoría la apruebe con 👍.</p>
+    <p><b>Sin trampas:</b> no se puede pegar texto, y salir del juego durante la ronda ${st.penalize?"hace perder los puntos de esa ronda":"se avisa a todos"}.</p>`;
+}
+function playing(){
+  const s=S.view, c=s.cur, inRound = c && c.players.includes(S.myId);
+  if (s.phase==="closing") return `<div class="card"><p class="letter">${esc(c.letter)}</p><h2 style="text-align:center">${s.bastaBy?`¡${esc(s.bastaBy)} dijo BASTA!`:"¡Se acabó el tiempo!"}</h2><p class="muted" style="text-align:center">Contando puntos…</p></div>`;
+  if (!inRound) return `<div class="card"><p class="letter">${esc(c.letter)}</p><p style="text-align:center">Entraste a mitad de ronda. Jugarás en la siguiente.</p><p class="timer" id="timer"></p></div>`;
+  return `
+  <div class="card">
+    <p class="muted" style="text-align:center;margin:0">La letra es</p>
+    <p class="letter">${esc(c.letter)}</p>
+    <p class="timer" id="timer"></p>
+  </div>
+  <div class="card answers">
+    ${c.cats.map((cat,i)=>`<div class="f"><label for="a${i}">${esc(cat)}</label><input id="a${i}" data-cat="${esc(cat)}" autocomplete="off" autocorrect="off" autocapitalize="words" spellcheck="false" value="${esc(S.myAnswers[cat]||"")}"></div>`).join("")}
+  </div>
+  <button id="basta" style="width:100%">¡BASTA!</button>
+  <p class="muted" id="bastaHint" style="text-align:center"></p>
+  <p class="warn" id="leftWarn" style="text-align:center"></p>
+  <p class="muted" id="plist" style="text-align:center"></p>`;
+}
+function updateTimer(){
+  const el=$("#timer"); if(!el) return;
+  const left=Math.max(0, Math.ceil((S.endAt-Date.now())/1000));
+  el.textContent = `⏱ ${Math.floor(left/60)}:${String(left%60).padStart(2,"0")}`;
+  el.classList.toggle("low", left<=10);
+}
+setInterval(()=>{ if(lastScreen==="playing") updateTimer(); }, 250);
+function updateLeftWarn(){
+  const el=$("#leftWarn"); if(!el||!S.view.cur) return;
+  const n=(S.view.cur.leaves||{})[S.myId]||0;
+  el.textContent = n ? (S.view.settings.penalize ? "⚠ Saliste del juego: esta ronda no sumarás puntos." : "⚠ Saliste del juego. Todos lo verán en los resultados.") : "";
+}
+function updatePlayersLine(){ updateLeftWarn(); const el=$("#plist"); if(el) el.textContent = "Jugando: "+S.view.players.filter(p=>S.view.cur&&S.view.cur.players.includes(p.id)).map(p=>p.name).join(", "); }
+function updateBasta(){
+  const b=$("#basta"); if(!b) return;
+  const c=S.view.cur, L=norm(c.letter);
+  const all = c.cats.every(cat => norm(S.myAnswers[cat]).startsWith(L) && norm(S.myAnswers[cat]));
+  const need = S.view.settings.bastaNeedsAll;
+  b.disabled = need && !all;
+  $("#bastaHint").textContent = need && !all ? `Llena todas las categorías con la letra ${c.letter} para poder decir ¡Basta!` : "";
+  c.cats.forEach((cat,i)=>{ const v=norm(S.myAnswers[cat]); const inp=$("#a"+i); if(inp) inp.classList.toggle("bad", !!v && !v.startsWith(L)); });
+  updatePlayersLine();
+}
+function review(){
+  const s=S.view, r=s.last, isHost=S.role==="host";
+  const names = Object.fromEntries(s.players.map(p=>[p.id,p.name]));
+  const pids = r.players, iPlayed = pids.includes(S.myId);
+  const cls = c => c.pts>=100?"p100":c.pts>0?"pshare":"p0";
+  const ranking = s.players.slice().sort((a,b)=>b.total-a.total);
+  const cell = (p, cat) => {
+    const c=r.score[p].cells[cat];
+    const my=((r.votes||{})[p+"|"+cat]||{})[S.myId]||0;
+    const icon = c.status==="ok" ? `<span class="tag p100" title="Está en la lista">✓</span> ` : c.status==="dudosa" ? `<span class="tag pshare" title="No está en la lista">?</span> ` : "";
+    const canVote = iPlayed && p!==S.myId && c.n && c.n.startsWith(norm(r.letter)) && !(s.settings.penalize && r.score[p].left);
+    return `<td><div class="ans ${c.why?"void":""}">${c.raw?icon+esc(c.raw):"—"}</div>
+      <div class="pts ${cls(c)}">${c.pts} ${c.count>1?`<span class="muted">(×${c.count})</span>`:""}</div>
+      ${c.why&&c.raw?`<div class="muted" style="font-size:12px">${esc(c.why)}</div>`:""}
+      ${canVote?`<div class="vote"><button data-p="${esc(p)}" data-c="${esc(cat)}" data-v="1" class="${my>0?"on":""}">👍 ${c.up||""}</button><button data-p="${esc(p)}" data-c="${esc(cat)}" data-v="-1" class="${my<0?"on":""}">👎 ${c.down||""}</button></div>`
+        : (c.up||c.down ? `<div class="muted" style="font-size:12px">👍 ${c.up} · 👎 ${c.down}</div>`:"")}</td>`;
+  };
+  return `
+  <div class="card">
+    <h2>Resultados de la letra ${esc(r.letter)}</h2>
+    ${s.bastaBy?`<p class="muted">${esc(s.bastaBy)} dijo ¡Basta!</p>`:""}
+    ${s.phase==="review"?`<p class="banner">✓ = está en la lista. ? = no está en la lista y vale 0, a menos que la mayoría vote 👍. Vota 👎 si una respuesta es inventada, está mal escrita o no es de esa categoría.</p>`:""}
+    <div class="scroll"><table>
+      <thead><tr><th>Categoría</th>${pids.map(p=>`<th>${esc(names[p]||"?")}${r.score[p].left?` <span class="warn" title="Salió del juego ${r.score[p].left} vez/veces">⚠ salió</span>`:""}</th>`).join("")}</tr></thead>
+      <tbody>
+      ${r.cats.map(cat=>`<tr><td><b>${esc(cat)}</b></td>${pids.map(p=>cell(p,cat)).join("")}</tr>`).join("")}
+      <tr><td><b>Ronda</b></td>${pids.map(p=>`<td class="pts">${r.score[p].total}</td>`).join("")}</tr>
+      </tbody>
+    </table></div>
+  </div>
+  <div class="card">
+    <h2>${s.phase==="final"?"🏆 Resultado final":"Marcador"}</h2>
+    <ol class="rank">${ranking.map((p,i)=>`<li><span>${i===0?"🥇 ":i===1?"🥈 ":i===2?"🥉 ":""}${esc(p.name)}${p.id===S.myId?" (tú)":""}</span><b>${p.total}</b></li>`).join("")}</ol>
+  </div>
+  ${isHost ? (s.phase==="final" ? `<button id="again" style="width:100%">Jugar otra partida</button>` :
+    `<div class="row"><button id="next">Siguiente ronda</button><button id="lobbyBtn" class="sec">Cambiar reglas</button><button id="end" class="sec">Terminar partida</button></div>`)
+    : `<p class="muted" style="text-align:center">${s.phase==="final"?"¡Gracias por jugar!":"Esperando la siguiente ronda…"}</p>`}`;
+}
+function bind(screen){
+  if (screen==="home"){
+    const nameOk = () => { const n=$("#name").value.trim(); if(!n){ $("#msg").textContent="Escribe tu nombre primero."; return false; } S.myName=n; store.set("nac-name", n); return true; };
+    $("#create").onclick = () => { if(nameOk()) hostStart(); };
+    $("#join").onclick = () => { const c=$("#code").value.trim(); if(!nameOk()) return; if(c.length<4){ $("#msg").textContent="Escribe el código de la sala."; return; } clientJoin(c); };
+    $("#code").onkeydown = e => { if(e.key==="Enter") $("#join").click(); };
+  }
+  if (screen==="lobby"){
+    $("#copy").onclick = () => { const i=$("#link"); i.select(); (navigator.clipboard?navigator.clipboard.writeText(i.value):Promise.reject()).catch(()=>document.execCommand("copy")); $("#copy").textContent="¡Copiado!"; };
+    if (S.role==="host"){
+      const save = () => {
+        const cats = $("#cats").value.split("\n").map(x=>x.trim()).filter(Boolean).slice(0,15);
+        H.settings.cats = cats.length?cats:DEFAULT_CATS.slice();
+        H.settings.seconds = +$("#secs").value; H.settings.mode = $("#mode").value; H.settings.penalize = $("#pen").value==="1";
+        const L = $("#letters").value.toUpperCase().replace(/[^A-ZÑ]/g,""); H.settings.letters = L || DEFAULT_LETTERS;
+      };
+      ["#cats","#secs","#mode","#pen","#letters"].forEach(id => $(id).onchange = () => { save(); const pub=hostPublic(); Object.values(H.players).forEach(p=>{ if(p.conn&&p.online) net.send(p.conn,{t:"state",s:pub}); }); });
+      $("#start").onclick = () => { save(); hostNewRound(); };
+    }
+  }
+  if (screen==="playing"){
+    app.querySelectorAll(".answers input").forEach(inp => {
+      inp.oninput = () => onType(inp.dataset.cat, inp.value);
+      inp.onpaste = inp.ondrop = e => e.preventDefault();   // no se puede pegar texto
+    });
+    const first = app.querySelector(".answers input"); if (first) first.focus();
+    const b=$("#basta"); if(b) b.onclick = sayBasta;
+  }
+  if (screen==="review" || screen==="final"){
+    if (screen==="review") app.querySelectorAll(".vote button").forEach(b => b.onclick = () => {
+      const v = b.classList.contains("on") ? 0 : +b.dataset.v;
+      if (S.role==="host") hostVote("host", b.dataset.p, b.dataset.c, v); else net.send({t:"vote", p:b.dataset.p, c:b.dataset.c, v});
+    });
+    if (S.role==="host"){
+      const n=$("#next"); if(n) n.onclick = hostNewRound;
+      const l=$("#lobbyBtn"); if(l) l.onclick = () => { H.phase="lobby"; hostBroadcast(); };
+      const e=$("#end"); if(e) e.onclick = () => { H.phase="final"; hostBroadcast(); };
+      const a=$("#again"); if(a) a.onclick = () => { H.rounds=[]; H.usedLetters=[]; H.cur=null; H.phase="lobby"; hostBroadcast(); };
+    }
+  }
+}
+window.addEventListener("beforeunload", e => { if (S.role==="host" && S.view && S.view.phase!=="final"){ e.preventDefault(); e.returnValue=""; } });
+render();
+</script>
+</body>
+</html>

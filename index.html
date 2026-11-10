@@ -329,6 +329,7 @@ function hostHandle(conn, msg){
 }
 function hostAction(pid, msg){
   if (msg.t==="ready" && H.phase==="lobby"){ H.players[pid].ready = !!msg.v; hostBroadcast(); return; }
+  if (msg.t==="start" && (H.phase==="lobby" || H.phase==="review")){ hostNewRound(); return; }
   if (msg.t==="answers" && H.cur && (H.phase==="playing"||H.phase==="closing")){
     H.cur.answers[pid] = sanitizeAnswers(msg.a);
   } else if (msg.t==="basta" && H.phase==="playing"){
@@ -527,7 +528,8 @@ function lobby(){
     ${playersBlock(true)}
     ${isHost ? `<button id="start" style="width:100%;margin-top:8px">${s.roundNo?"Seguir jugando":"Empezar partida"}</button>
       ${ready<total?`<p class="muted" style="font-size:14px">Puedes empezar aunque no todos hayan marcado "listo".</p>`:""}`
-      : `<button id="ready" class="${me.ready?"sec":""}" style="width:100%;margin-top:8px">${me.ready?"✅ Estás listo (toca para cancelar)":"¡Estoy listo!"}</button>`}
+      : `<button id="ready" class="${me.ready?"sec":""}" style="width:100%;margin-top:8px">${me.ready?"✅ Estás listo (toca para cancelar)":"¡Estoy listo!"}</button>
+         <button id="start" class="sec" style="width:100%;margin-top:8px">${s.roundNo?"Seguir jugando":"Empezar partida"}</button>`}
   </div>
   <div class="card">
     <h2>Invita a tus amigos</h2>
@@ -548,6 +550,11 @@ function lobby(){
             <option value="dividir" ${st.mode==="dividir"?"selected":""}>Dividir entre todos (100, 50, 33, 25)</option>
           </select></div>
       </div>
+      <label for="bnall">¿Cuándo se puede decir ¡Basta!?</label>
+      <select id="bnall">
+        <option value="1" ${st.bastaNeedsAll?"selected":""}>Solo con todas las categorías llenas</option>
+        <option value="0" ${!st.bastaNeedsAll?"selected":""}>En cualquier momento</option>
+      </select>
       <label for="pen">Si alguien sale del juego durante la ronda (cambia de app o pestaña)</label>
       <select id="pen">
         <option value="1" ${st.penalize?"selected":""}>Pierde todos los puntos de esa ronda</option>
@@ -561,7 +568,7 @@ function lobby(){
 }
 function rulesText(st){
   return `<p><b>Categorías:</b> ${st.cats.map(esc).join(", ")}</p>
-    <p><b>Tiempo:</b> ${st.seconds} segundos, o hasta que alguien diga ¡Basta!</p>
+    <p><b>Tiempo:</b> ${st.seconds} segundos, o hasta que alguien diga ¡Basta!${st.bastaNeedsAll?" (solo con todas las categorías llenas)":""}</p>
     <p><b>Puntos:</b> palabra única 100; repetida ${st.mode==="mitad"?"se divide a la mitad por cada jugador extra (50, 25, 12.5…)":"se divide entre quienes la tengan (50, 33, 25…)"}. Vacía o con otra letra: 0.</p>
     <p><b>Verificador:</b> las palabras se revisan contra listas. Si no aparece (mal escrita, inventada o de otra categoría) vale 0, salvo que la mayoría la apruebe con 👍.</p>
     <p><b>Sin trampas:</b> no se puede pegar texto, y salir del juego durante la ronda ${st.penalize?"hace perder los puntos de esa ronda":"se avisa a todos"}.</p>`;
@@ -600,10 +607,10 @@ function updatePlayersLine(){ updateLeftWarn(); const el=$("#plist"); if(el) el.
 function updateBasta(){
   const b=$("#basta"); if(!b) return;
   const c=S.view.cur, L=norm(c.letter);
-  const all = c.cats.every(cat => norm(S.myAnswers[cat]).startsWith(L) && norm(S.myAnswers[cat]));
+  const missing = c.cats.filter(cat => !(norm(S.myAnswers[cat]) && norm(S.myAnswers[cat]).startsWith(L))).length;
   const need = S.view.settings.bastaNeedsAll;
-  b.disabled = need && !all;
-  $("#bastaHint").textContent = need && !all ? `Llena todas las categorías con la letra ${c.letter} para poder decir ¡Basta!` : "";
+  b.disabled = need && missing>0;
+  $("#bastaHint").textContent = need && missing>0 ? `Te ${missing===1?"falta 1 categoría":"faltan "+missing+" categorías"} con la letra ${c.letter} para poder decir ¡Basta!` : "";
   c.cats.forEach((cat,i)=>{ const v=norm(S.myAnswers[cat]); const inp=$("#a"+i); if(inp) inp.classList.toggle("bad", !!v && !v.startsWith(L)); });
   updatePlayersLine();
 }
@@ -646,7 +653,7 @@ function review(){
   </div>
   ${isHost ? (s.phase==="final" ? `<button id="again" style="width:100%">Jugar otra partida</button>` :
     `<div class="row"><button id="next">Siguiente ronda</button><button id="lobbyBtn" class="sec">Cambiar reglas</button><button id="end" class="sec">Terminar partida</button></div>`)
-    : `<p class="muted" style="text-align:center">${s.phase==="final"?"¡Gracias por jugar!":"Esperando la siguiente ronda…"}</p>`}`;
+    : (s.phase==="final" ? `<p class="muted" style="text-align:center">¡Gracias por jugar!</p>` : `<button id="next" style="width:100%">Siguiente ronda</button>`)}`;
 }
 let bindStart = () => {};
 function bind(screen){
@@ -658,15 +665,16 @@ function bind(screen){
   }
   if (screen==="lobby"){
     const rb=$("#ready"); if (rb) rb.onclick = () => { const me=S.view.players.find(p=>p.id===S.myId)||{}; net.send({t:"ready", v:!me.ready}); };
+    if (S.role!=="host"){ const sb=$("#start"); if (sb) sb.onclick = () => { sb.disabled=true; net.send({t:"start"}); }; }
     $("#copy").onclick = () => { const i=$("#link"); i.select(); (navigator.clipboard?navigator.clipboard.writeText(i.value):Promise.reject()).catch(()=>document.execCommand("copy")); $("#copy").textContent="¡Copiado!"; };
     if (S.role==="host"){
       const save = () => {
         const cats = $("#cats").value.split("\n").map(x=>x.trim()).filter(Boolean).slice(0,15);
         H.settings.cats = cats.length?cats:DEFAULT_CATS.slice();
-        H.settings.seconds = +$("#secs").value; H.settings.mode = $("#mode").value; H.settings.penalize = $("#pen").value==="1";
+        H.settings.seconds = +$("#secs").value; H.settings.mode = $("#mode").value; H.settings.penalize = $("#pen").value==="1"; H.settings.bastaNeedsAll = $("#bnall").value==="1";
         const L = $("#letters").value.toUpperCase().replace(/[^A-ZÑ]/g,""); H.settings.letters = L || DEFAULT_LETTERS;
       };
-      ["#cats","#secs","#mode","#pen","#letters"].forEach(id => $(id).onchange = () => { save(); const pub=hostPublic(); Object.values(H.players).forEach(p=>{ if(p.conn&&p.online) net.send(p.conn,{t:"state",s:pub}); }); });
+      ["#cats","#secs","#mode","#bnall","#pen","#letters"].forEach(id => $(id).onchange = () => { save(); const pub=hostPublic(); Object.values(H.players).forEach(p=>{ if(p.conn&&p.online) net.send(p.conn,{t:"state",s:pub}); }); });
       bindStart = () => { $("#start").onclick = () => { save(); hostNewRound(); }; };
       bindStart();
     }
@@ -684,6 +692,7 @@ function bind(screen){
       const v = b.classList.contains("on") ? 0 : +b.dataset.v;
       if (S.role==="host") hostVote("host", b.dataset.p, b.dataset.c, v); else net.send({t:"vote", p:b.dataset.p, c:b.dataset.c, v});
     });
+    if (S.role!=="host"){ const n=$("#next"); if(n) n.onclick = () => { n.disabled=true; net.send({t:"start"}); }; }
     if (S.role==="host"){
       const n=$("#next"); if(n) n.onclick = hostNewRound;
       const l=$("#lobbyBtn"); if(l) l.onclick = () => { H.phase="lobby"; hostBroadcast(); };

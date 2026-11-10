@@ -164,6 +164,63 @@ function lev(a,b,max){
     if(best>max) return max+1; prev=cur; }
   return prev[b.length];
 }
+/* ---------- Verificador en línea gratis: Wikidata (Wikipedia) + Wikcionario ---------- */
+// Qué buscar según la categoría: palabras clave que deben aparecer en la descripción de Wikidata.
+const WEB_KINDS = [
+  [/apellido/, /apellido|family name|surname/],
+  [/nombre/, /nombre (de pila|masculino|femenino|propio)|prenombre|given name|nombre de persona/],
+  [/animal/, /especie|genero de|familia de|animal|mamifero|ave |aves|pez|peces|reptil|insecto|anfibio|raza|orden de|taxon|aracnido|molusco|crustaceo|felino|canido|cetaceo|primate|roedor|serpiente/],
+  [/fruta|verdura/, /fruta|fruto|baya|verdura|hortaliza|cultivar|especie de planta|planta|legumbre|tuberculo|citrico/],
+  [/pais|ciudad|lugar/, /pais|estado soberano|ciudad|capital|municipio|localidad|provincia|comuna|region|isla|territorio|departamento|estado de/],
+  [/color/, /color|tono|pigmento/],
+  [/marca|empresa/, /marca|empresa|compania|fabricante|multinacional|cadena|corporacion|tienda|restaurante|refresco|automoviles|sociedad|ropa|tecnologia/],
+  [/tv|tele/, /serie|televis|programa|telenovela|canal|caricatura|animad|personaje|dibujos|reality|anime|show|sitcom|presentador|conductor/],
+  [/almacen|supermercado|super/, /alimento|producto|bebida|condimento|ingrediente|comida|dulce|lacteo|cereal|limpieza|golosina|snack|pan|embutido|queso|marca/],
+  [/comida|platillo|plato/, /plato|comida|alimento|postre|bebida|gastronom|guiso|sopa|pan|dulce|tipico/],
+  [/profesion|oficio|trabajo/, /profesion|oficio|ocupacion|trabajador|persona que/],
+];
+function webKind(cat){ const c=norm(cat); const k=WEB_KINDS.find(([re])=>re.test(c)); return k?k[1]:null; }
+// Categorías donde basta con que la palabra exista en el diccionario (Cosa, Almacén, Comida, Profesión, o inventadas).
+const DICT_OK = /cosa|objeto|almacen|supermercado|comida|platillo|profesion|oficio/;
+async function getJSON(url, ms){ const ctl=new AbortController(); const t=setTimeout(()=>ctl.abort(), ms||8000); try{ const r=await fetch(url,{signal:ctl.signal}); if(!r.ok) throw new Error("HTTP "+r.status); return await r.json(); } finally{ clearTimeout(t); } }
+async function wikidataMatch(word, n, kindRe){
+  const u="https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&origin=*&type=item&limit=10&language=es&uselang=es&search="+encodeURIComponent(word);
+  const d=await getJSON(u);
+  return (d.search||[]).some(x => {
+    const labels=[x.label, x.match&&x.match.text].filter(Boolean).map(norm);
+    if (!labels.some(l => l===n || l===n.replace(/s$/,"") || l===n.replace(/es$/,""))) return false;
+    return !kindRe || kindRe.test(norm(x.description||""));
+  });
+}
+async function wiktionaryHas(word, n){
+  const u="https://es.wiktionary.org/w/api.php?action=query&list=search&format=json&origin=*&srnamespace=0&srlimit=10&srsearch="+encodeURIComponent(word);
+  const d=await getJSON(u);
+  return ((d.query&&d.query.search)||[]).some(x => norm(x.title)===n);
+}
+async function checkOnline(cat, word, n){
+  const kind=webKind(cat), c=norm(cat);
+  if (kind && await wikidataMatch(word, n, kind)) return true;
+  if (DICT_OK.test(c) || !kind) return await wiktionaryHas(word, n);
+  return false;
+}
+async function verifyOnline(r){
+  const L=norm(r.letter), seen={}, todo=[];
+  r.players.forEach(p => r.cats.forEach(cat => {
+    const raw=((r.answers[p]||{})[cat]||"").trim(), n=norm(raw), key=cat+"|"+n;
+    if (!n || !n.startsWith(L) || seen[key]) return; seen[key]=1;
+    if (checkWord(cat, n).status==="ok") return;          // ya está en la lista: no hace falta buscar
+    todo.push({cat, raw, n, key});
+  }));
+  if (!todo.length) return;
+  r.aiStatus="checking"; r.aiSource="web"; hostBroadcast();
+  r.web = r.web || {}; let fails=0;
+  for (let i=0;i<todo.length;i+=6){
+    await Promise.all(todo.slice(i,i+6).map(async it => {
+      try { r.web[it.key] = await checkOnline(it.cat, it.raw, it.n); } catch(e){ fails++; }
+    }));
+  }
+  r.aiStatus = fails===todo.length ? "error" : "ok"; hostBroadcast();
+}
 // Devuelve {status:"ok"|"dudosa"|"libre", suggest}
 const checkCache = {};
 function checkWord(cat, n){
@@ -203,10 +260,13 @@ function scoreRound(round, playerIds, mode, penalize){
       else {
         const ai = (round.ai||{})[cat+"|"+n];
         chk = ai ? {status: ai.valida?"ok":"dudosa", suggest: ai.correccion||null, motivo: ai.motivo||"", ai:true} : checkWord(cat, n);
-        if (chk.status==="dudosa" && !(up>down)) why = chk.ai ? ("IA: "+(chk.motivo||"no válida")+(chk.suggest&&norm(chk.suggest)!==n?" (¿"+chk.suggest+"?)":"")) : chk.suggest ? "¿quisiste decir “"+chk.suggest+"”?" : "no está en la lista";
+        const web = (round.web||{})[cat+"|"+n];
+        if (!ai && web===true) chk = {status:"ok", motivo:"Encontrada en Wikipedia o el diccionario", web:true};
+        else if (!ai && web===false) chk = {status:"dudosa", suggest: chk.suggest||null, motivo:"No aparece en Wikipedia ni en el diccionario", web:true};
+        if (chk.status==="dudosa" && !(up>down)) why = chk.web ? ("no aparece en Wikipedia ni en el diccionario"+(chk.suggest?" (¿"+chk.suggest+"?)":"")) : chk.ai ? ("IA: "+(chk.motivo||"no válida")+(chk.suggest&&norm(chk.suggest)!==n?" (¿"+chk.suggest+"?)":"")) : chk.suggest ? "¿quisiste decir “"+chk.suggest+"”?" : "no está en la lista";
         else if (chk.status!=="dudosa" && down>up) why = "rechazada por votos";
       }
-      res[p].cells[cat] = {raw, n, why, pts:0, count:0, status: chk?chk.status:null, ai: !!(chk&&chk.ai), motivo: chk&&chk.motivo||"", up, down, my:null};
+      res[p].cells[cat] = {raw, n, why, pts:0, count:0, status: chk?chk.status:null, ai: !!(chk&&(chk.ai||chk.web)), motivo: chk&&chk.motivo||"", up, down, my:null};
       if (!why) (groups[n] = groups[n] || []).push(p);
     });
     Object.values(groups).forEach(ps => ps.forEach(p => {
@@ -305,7 +365,7 @@ function hostClose(){
   H.phase="closing"; clearInterval(H.timer);
   H.cur.answers.host = sanitizeAnswers(S.myAnswers);
   hostBroadcast();                                   // los clientes mandan su versión final
-  setTimeout(()=>{ const r=H.cur; H.rounds.push(r); H.phase="review"; hostBroadcast(); verifyWithAI(r); }, 1500);
+  setTimeout(()=>{ const r=H.cur; H.rounds.push(r); H.phase="review"; hostBroadcast(); if (VERIFICADOR_URL) verifyWithAI(r); else verifyOnline(r); }, 1500);
 }
 // Envía las respuestas de la ronda a la IA (una vez por palabra distinta) y guarda el veredicto.
 async function verifyWithAI(r){
@@ -338,7 +398,7 @@ function hostVote(voter, owner, cat, v){
 }
 function hostPublic(){
   const ids = H.order;
-  const results = H.rounds.map(r => ({letter:r.letter, cats:r.cats, players:r.players, votes:r.votes, leaves:r.leaves, aiStatus:r.aiStatus||"", score: scoreRound(r, r.players, H.settings.mode, H.settings.penalize)}));
+  const results = H.rounds.map(r => ({letter:r.letter, cats:r.cats, players:r.players, votes:r.votes, leaves:r.leaves, aiStatus:r.aiStatus||"", aiSource:r.aiSource||"ia", score: scoreRound(r, r.players, H.settings.mode, H.settings.penalize)}));
   const totals = {}; ids.forEach(p=>totals[p]=0);
   results.forEach(r => Object.entries(r.score).forEach(([p,v])=> totals[p]=Math.round(((totals[p]||0)+v.total)*10)/10));
   return {
@@ -569,9 +629,9 @@ function review(){
   <div class="card">
     <h2>Resultados de la letra ${esc(r.letter)}</h2>
     ${s.bastaBy?`<p class="muted">${esc(s.bastaBy)} dijo ¡Basta!</p>`:""}
-    ${r.aiStatus==="checking"?`<p class="banner">🤖 La IA está revisando las respuestas… los puntos pueden cambiar en unos segundos.</p>`:""}
-    ${r.aiStatus==="error"?`<p class="banner">No se pudo usar la IA en esta ronda; se revisó con las listas de palabras.</p>`:""}
-    ${s.phase==="review"?`<p class="banner">${r.aiStatus==="ok"?"🤖 Revisado por IA. ✓ = válida. ✗ = inventada, mal escrita o de otra categoría (vale 0, salvo que la mayoría vote 👍).":"✓ = está en la lista. ? = no está en la lista y vale 0, a menos que la mayoría vote 👍."} Vota 👎 si una respuesta no debería contar.</p>`:""}
+    ${r.aiStatus==="checking"?`<p class="banner">${r.aiSource==="web"?"🔎 Buscando las palabras en Wikipedia y el diccionario…":"🤖 La IA está revisando las respuestas…"} Los puntos pueden cambiar en unos segundos.</p>`:""}
+    ${r.aiStatus==="error"?`<p class="banner">No se pudo revisar en línea en esta ronda; se usaron las listas de palabras.</p>`:""}
+    ${s.phase==="review"?`<p class="banner">✓ = válida (está en la lista${r.aiStatus==="ok"?(r.aiSource==="web"?", en Wikipedia o en el diccionario":" o la aprobó la IA"):""}). ${r.aiStatus==="ok"?"✗":"?"} = no se encontró: vale 0, salvo que la mayoría vote 👍. Vota 👎 si una respuesta no debería contar.</p>`:""}
     <div class="scroll"><table>
       <thead><tr><th>Categoría</th>${pids.map(p=>`<th>${esc(names[p]||"?")}${r.score[p].left?` <span class="warn" title="Salió del juego ${r.score[p].left} vez/veces">⚠ salió</span>`:""}</th>`).join("")}</tr></thead>
       <tbody>

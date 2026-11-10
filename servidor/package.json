@@ -1,0 +1,8 @@
+{
+  "name": "verificador-nombre-animal-cosa",
+  "private": true,
+  "type": "module",
+  "scripts": { "deploy": "wrangler deploy" },
+  "dependencies": { "@anthropic-ai/sdk": "^1.7.0" },
+  "devDependencies": { "wrangler": "^4.159.0" }
+}

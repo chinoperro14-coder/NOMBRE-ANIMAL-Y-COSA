@@ -253,7 +253,7 @@ function scoreRound(round, playerIds, mode, penalize){
       const n = norm(raw);
       const v = (round.votes||{})[p+"|"+cat] || {};
       const up = Object.values(v).filter(x=>x>0).length, down = Object.values(v).filter(x=>x<0).length;
-      let why = "", chk = null;
+      let why = "", chk = null, note = "";
       if (!n) why = "vacía";
       else if (!n.startsWith(L)) why = "no empieza con "+round.letter;
       else if (penalize && res[p].left) why = "salió del juego";
@@ -263,10 +263,12 @@ function scoreRound(round, playerIds, mode, penalize){
         const web = (round.web||{})[cat+"|"+n];
         if (!ai && web===true) chk = {status:"ok", motivo:"Encontrada en Wikipedia o el diccionario", web:true};
         else if (!ai && web===false) chk = {status:"dudosa", suggest: chk.suggest||null, motivo:"No aparece en Wikipedia ni en el diccionario", web:true};
-        if (chk.status==="dudosa" && !(up>down)) why = chk.web ? ("no aparece en Wikipedia ni en el diccionario"+(chk.suggest?" (¿"+chk.suggest+"?)":"")) : chk.ai ? ("IA: "+(chk.motivo||"no válida")+(chk.suggest&&norm(chk.suggest)!==n?" (¿"+chk.suggest+"?)":"")) : chk.suggest ? "¿quisiste decir “"+chk.suggest+"”?" : "no está en la lista";
+        // Palabra no encontrada (lista/Wikipedia/diccionario): queda dudosa pero VALE, salvo que la mayoría vote 👎.
+        if (chk.status==="dudosa" && !chk.ai){ note = (chk.web ? "no se encontró en Wikipedia ni en el diccionario" : "no está en la lista") + (chk.suggest ? " (¿"+chk.suggest+"?)" : ""); if (down>up) why = "rechazada por votos"; }
+        else if (chk.status==="dudosa" && !(up>down)) why = chk.web ? ("no aparece en Wikipedia ni en el diccionario"+(chk.suggest?" (¿"+chk.suggest+"?)":"")) : chk.ai ? ("IA: "+(chk.motivo||"no válida")+(chk.suggest&&norm(chk.suggest)!==n?" (¿"+chk.suggest+"?)":"")) : chk.suggest ? "¿quisiste decir “"+chk.suggest+"”?" : "no está en la lista";
         else if (chk.status!=="dudosa" && down>up) why = "rechazada por votos";
       }
-      res[p].cells[cat] = {raw, n, why, pts:0, count:0, status: chk?chk.status:null, ai: !!(chk&&(chk.ai||chk.web)), motivo: chk&&chk.motivo||"", up, down, my:null};
+      res[p].cells[cat] = {raw, n, why, note, pts:0, count:0, status: chk?chk.status:null, ai: !!(chk&&(chk.ai||chk.web)), motivo: chk&&chk.motivo||"", up, down, my:null};
       if (!why) (groups[n] = groups[n] || []).push(p);
     });
     Object.values(groups).forEach(ps => ps.forEach(p => {
@@ -570,7 +572,7 @@ function rulesText(st){
   return `<p><b>Categorías:</b> ${st.cats.map(esc).join(", ")}</p>
     <p><b>Tiempo:</b> ${st.seconds} segundos, o hasta que alguien diga ¡Basta!${st.bastaNeedsAll?" (solo con todas las categorías llenas)":""}</p>
     <p><b>Puntos:</b> palabra única 100; repetida ${st.mode==="mitad"?"se divide a la mitad por cada jugador extra (50, 25, 12.5…)":"se divide entre quienes la tengan (50, 33, 25…)"}. Vacía o con otra letra: 0.</p>
-    <p><b>Verificador:</b> las palabras se revisan contra listas. Si no aparece (mal escrita, inventada o de otra categoría) vale 0, salvo que la mayoría la apruebe con 👍.</p>
+    <p><b>Verificador:</b> las palabras se buscan en listas, Wikipedia y el diccionario. Si no aparecen quedan como dudosas (?): valen, salvo que la mayoría vote 👎. Puedes consultarlas en la RAE o Google.</p>
     <p><b>Sin trampas:</b> no se puede pegar texto, y salir del juego durante la ronda ${st.penalize?"hace perder los puntos de esa ronda":"se avisa a todos"}.</p>`;
 }
 function playing(){
@@ -623,12 +625,14 @@ function review(){
   const cell = (p, cat) => {
     const c=r.score[p].cells[cat];
     const my=((r.votes||{})[p+"|"+cat]||{})[S.myId]||0;
-    const icon = c.ai ? (c.status==="ok" ? `<span class="tag p100" title="${esc(c.motivo)}">✓</span> ` : `<span class="tag p0" title="${esc(c.motivo)}">✗</span> `)
+    const consult = c.status==="dudosa" && c.raw && !c.why ? `<div class="vote"><a class="chip" style="text-decoration:none;color:inherit;font-size:12px;padding:3px 8px" target="_blank" rel="noopener" href="https://dle.rae.es/${encodeURIComponent(c.raw.trim().toLowerCase())}">RAE</a><a class="chip" style="text-decoration:none;color:inherit;font-size:12px;padding:3px 8px" target="_blank" rel="noopener" href="https://www.google.com/search?q=${encodeURIComponent(c.raw.trim()+" "+cat)}">Google</a></div>` : "";
+    const icon = c.status==="dudosa" && !c.why ? `<span class="tag pshare" title="Dudosa: vota si debe contar">?</span> ` : c.ai ? (c.status==="ok" ? `<span class="tag p100" title="${esc(c.motivo)}">✓</span> ` : `<span class="tag p0" title="${esc(c.motivo)}">✗</span> `)
       : c.status==="ok" ? `<span class="tag p100" title="Está en la lista">✓</span> ` : c.status==="dudosa" ? `<span class="tag pshare" title="No está en la lista">?</span> ` : "";
     const canVote = iPlayed && p!==S.myId && c.n && c.n.startsWith(norm(r.letter)) && !(s.settings.penalize && r.score[p].left);
     return `<td><div class="ans ${c.why?"void":""}">${c.raw?icon+esc(c.raw):"—"}</div>
       <div class="pts ${cls(c)}">${c.pts} ${c.count>1?`<span class="muted">(×${c.count})</span>`:""}</div>
       ${c.why&&c.raw?`<div class="muted" style="font-size:12px">${esc(c.why)}</div>`:""}
+      ${c.note&&!c.why?`<div class="muted" style="font-size:12px">Dudosa: ${esc(c.note)}</div>`+consult:""}
       ${canVote?`<div class="vote"><button data-p="${esc(p)}" data-c="${esc(cat)}" data-v="1" class="${my>0?"on":""}">👍 ${c.up||""}</button><button data-p="${esc(p)}" data-c="${esc(cat)}" data-v="-1" class="${my<0?"on":""}">👎 ${c.down||""}</button></div>`
         : (c.up||c.down ? `<div class="muted" style="font-size:12px">👍 ${c.up} · 👎 ${c.down}</div>`:"")}</td>`;
   };
@@ -638,7 +642,7 @@ function review(){
     ${s.bastaBy?`<p class="muted">${esc(s.bastaBy)} dijo ¡Basta!</p>`:""}
     ${r.aiStatus==="checking"?`<p class="banner">${r.aiSource==="web"?"🔎 Buscando las palabras en Wikipedia y el diccionario…":"🤖 La IA está revisando las respuestas…"} Los puntos pueden cambiar en unos segundos.</p>`:""}
     ${r.aiStatus==="error"?`<p class="banner">No se pudo revisar en línea en esta ronda; se usaron las listas de palabras.</p>`:""}
-    ${s.phase==="review"?`<p class="banner">✓ = válida (está en la lista${r.aiStatus==="ok"?(r.aiSource==="web"?", en Wikipedia o en el diccionario":" o la aprobó la IA"):""}). ${r.aiStatus==="ok"?"✗":"?"} = no se encontró: vale 0, salvo que la mayoría vote 👍. Vota 👎 si una respuesta no debería contar.</p>`:""}
+    ${s.phase==="review"?`<p class="banner">✓ = válida (está en la lista${r.aiStatus==="ok"?(r.aiSource==="web"?", en Wikipedia o en el diccionario":" o la aprobó la IA"):""}). ? = dudosa: no se encontró, pero vale salvo que la mayoría vote 👎. Usa RAE o Google para consultarla. Vota 👎 si una respuesta no debería contar.</p>`:""}
     <div class="scroll"><table>
       <thead><tr><th>Categoría</th>${pids.map(p=>`<th>${esc(names[p]||"?")}${r.score[p].left?` <span class="warn" title="Salió del juego ${r.score[p].left} vez/veces">⚠ salió</span>`:""}</th>`).join("")}</tr></thead>
       <tbody>

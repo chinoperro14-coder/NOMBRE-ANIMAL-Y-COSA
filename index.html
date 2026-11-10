@@ -265,6 +265,7 @@ function hostHandle(conn, msg){
   hostAction(pid, msg);
 }
 function hostAction(pid, msg){
+  if (msg.t==="ready" && H.phase==="lobby"){ H.players[pid].ready = !!msg.v; hostBroadcast(); return; }
   if (msg.t==="answers" && H.cur && (H.phase==="playing"||H.phase==="closing")){
     H.cur.answers[pid] = sanitizeAnswers(msg.a);
   } else if (msg.t==="basta" && H.phase==="playing"){
@@ -284,10 +285,15 @@ function hostNewRound(){
   const letter = avail[Math.floor(Math.random()*avail.length)];
   H.usedLetters.push(letter);
   H.cur = {letter, cats:H.settings.cats.slice(), answers:{}, votes:{}, leaves:{}, players: H.order.filter(p=>H.players[p].online!==false)};
-  H.phase="playing"; H.bastaBy=null;
-  H.cur.endAt = Date.now() + H.settings.seconds*1000;
+  H.phase="countdown"; H.bastaBy=null;
+  Object.values(H.players).forEach(p => p.ready=false);
+  H.cur.startAt = Date.now() + 3500;
+  H.cur.endAt = H.cur.startAt + H.settings.seconds*1000;
   clearInterval(H.timer);
-  H.timer = setInterval(()=>{ if (H.phase==="playing" && Date.now()>=H.cur.endAt) hostClose(); }, 250);
+  H.timer = setInterval(()=>{
+    if (H.phase==="countdown" && Date.now()>=H.cur.startAt){ H.phase="playing"; hostBroadcast(); }
+    else if (H.phase==="playing" && Date.now()>=H.cur.endAt) hostClose();
+  }, 100);
   S.myAnswers = {};
   hostBroadcast();
 }
@@ -311,10 +317,11 @@ function hostPublic(){
   results.forEach(r => Object.entries(r.score).forEach(([p,v])=> totals[p]=Math.round(((totals[p]||0)+v.total)*10)/10));
   return {
     code:S.code, phase:H.phase, settings:H.settings,
-    players: ids.map(p=>({id:p, name:H.players[p].name, online:H.players[p].online!==false, total:totals[p]||0})),
+    players: ids.map(p=>({id:p, name:H.players[p].name, online:H.players[p].online!==false, ready:!!H.players[p].ready||p==="host", total:totals[p]||0})),
+    startIn: H.phase==="countdown" ? Math.max(0,H.cur.startAt-Date.now()) : 0,
     cur: H.cur && (H.phase==="playing"||H.phase==="closing") ? {letter:H.cur.letter, cats:H.cur.cats, remaining:Math.max(0,H.cur.endAt-Date.now()), players:H.cur.players, leaves:H.cur.leaves} : null,
     last: results.length ? results[results.length-1] : null,
-    roundNo: H.rounds.length + (H.phase==="playing"||H.phase==="closing"?1:0),
+    roundNo: H.rounds.length + (H.phase==="playing"||H.phase==="closing"||H.phase==="countdown"?1:0),
     bastaBy: H.bastaBy ? (H.players[H.bastaBy]||{}).name : null,
   };
 }
@@ -341,6 +348,7 @@ function clientJoin(code){
 function receiveState(s){
   const prev = S.view;
   S.view = s;
+  if (s.phase==="countdown") S.startAt = Date.now() + s.startIn;
   if (s.cur){
     S.endAt = Date.now() + s.cur.remaining;
     if (!prev || !prev.cur || prev.cur.letter!==s.cur.letter || prev.roundNo!==s.roundNo){ S.myAnswers = {}; }
@@ -377,15 +385,19 @@ function render(){
   else screen = s.phase;
   // No volver a pintar el formulario mientras se escribe (evita perder el foco)
   if (screen==="playing" && lastScreen==="playing"){ updateTimer(); updatePlayersLine(); return; }
+  // En la sala de espera del anfitrión solo se actualiza la lista (para no borrar lo que está editando)
+  if (screen==="lobby" && lastScreen==="lobby" && S.role==="host" && $("#wait")){
+    const tmp=document.createElement("div"); tmp.innerHTML=lobby(); $("#wait").replaceWith(tmp.querySelector("#wait")); bindStart(); return;
+  }
   lastScreen = screen;
   app.className = S.role==="host" ? "host" : "";
-  app.innerHTML = header() + ({home, error, connecting, lobby, playing, closing:playing, review, final:review}[screen])();
+  app.innerHTML = header() + ({home, error, connecting, lobby, countdown, playing, closing:playing, review, final:review}[screen])();
   bind(screen);
   if (screen==="playing") { updateTimer(); updateBasta(); }
 }
 function header(){
   return `<h1>Nombre, Animal y Cosa</h1>`+
-    (S.view ? `<p class="muted">Sala <b>${esc(S.view.code)}</b> · Ronda ${S.view.roundNo||0}${S.role==="host"?" · Eres el anfitrión":""}</p>`:"")+
+    (S.view ? `<p class="muted">Sala <b>${esc(S.view.code)}</b> ${S.view.roundNo?" · Ronda "+S.view.roundNo:""}${S.role==="host"?" · Eres el anfitrión":""}</p>`:"")+
     (S.error && S.view ? `<p class="err">${esc(S.error)}</p>`:"");
 }
 function home(){
@@ -410,20 +422,31 @@ function home(){
 function error(){ return `<div class="card"><p class="err">${esc(S.error)}</p><button onclick="location.href=location.pathname+(LOCAL?'?modo=local':'')">Volver al inicio</button></div>`; }
 function connecting(){ return `<div class="card"><p>Conectando…</p></div>`; }
 function shareLink(){ return location.origin+location.pathname+"?"+(LOCAL?"modo=local&":"")+"sala="+S.view.code; }
-function playersBlock(){
-  return `<div class="chips">${S.view.players.map(p=>`<span class="chip">${esc(p.name)}${p.id===S.myId?" (tú)":""}${p.online?"":" · desconectado"}</span>`).join("")}</div>`;
+function playersBlock(showReady){
+  return `<div class="chips">${S.view.players.map(p=>`<span class="chip">${showReady?(p.ready?"✅ ":"⏳ "):""}${esc(p.name)}${p.id===S.myId?" (tú)":""}${p.id==="host"?" · anfitrión":""}${p.online?"":" · desconectado"}</span>`).join("")}</div>`;
 }
+function countdown(){
+  return `<div class="card" style="text-align:center"><p class="muted">¡Prepárense! La letra sale en…</p><p class="letter" id="cd">3</p><p class="muted">Ronda ${S.view.roundNo}</p></div>`;
+}
+setInterval(()=>{ const el=$("#cd"); if(el) el.textContent = Math.max(1, Math.ceil((S.startAt-Date.now())/1000)); }, 100);
 function lobby(){
   const s=S.view, st=s.settings, isHost=S.role==="host";
+  const ready = s.players.filter(p=>p.ready).length, total = s.players.length;
+  const me = s.players.find(p=>p.id===S.myId) || {};
   return `
+  <div class="card" id="wait" style="text-align:center">
+    <h2>🕒 Sala de espera</h2>
+    <p class="muted">${isHost ? "Cuando estén todos, toca <b>Empezar partida</b>." : "Espera aquí. La partida empieza cuando el anfitrión lo indique."}</p>
+    <p style="font-size:20px;font-weight:700;margin:10px 0">${ready} de ${total} listos</p>
+    ${playersBlock(true)}
+    ${isHost ? `<button id="start" style="width:100%;margin-top:8px">${s.roundNo?"Seguir jugando":"Empezar partida"}</button>
+      ${ready<total?`<p class="muted" style="font-size:14px">Puedes empezar aunque no todos hayan marcado "listo".</p>`:""}`
+      : `<button id="ready" class="${me.ready?"sec":""}" style="width:100%;margin-top:8px">${me.ready?"✅ Estás listo (toca para cancelar)":"¡Estoy listo!"}</button>`}
+  </div>
   <div class="card">
     <h2>Invita a tus amigos</h2>
     <p>Código de sala: <span class="code">${esc(s.code)}</span></p>
     <div class="row"><input id="link" readonly value="${esc(shareLink())}"><button id="copy" class="sec" style="flex:0 0 auto">Copiar link</button></div>
-  </div>
-  <div class="card">
-    <h2>Jugadores (${s.players.length})</h2>
-    ${playersBlock()}
   </div>
   <div class="card">
     <h2>Reglas</h2>
@@ -448,7 +471,7 @@ function lobby(){
       <input id="letters" value="${esc(st.letters)}">
     ` : rulesText(st)}
   </div>
-  ${isHost ? `<button id="start" style="width:100%">Empezar ronda</button>` : `<p class="muted" style="text-align:center">Esperando a que el anfitrión empiece…</p>`}`;
+`;
 }
 function rulesText(st){
   return `<p><b>Categorías:</b> ${st.cats.map(esc).join(", ")}</p>
@@ -536,6 +559,7 @@ function review(){
     `<div class="row"><button id="next">Siguiente ronda</button><button id="lobbyBtn" class="sec">Cambiar reglas</button><button id="end" class="sec">Terminar partida</button></div>`)
     : `<p class="muted" style="text-align:center">${s.phase==="final"?"¡Gracias por jugar!":"Esperando la siguiente ronda…"}</p>`}`;
 }
+let bindStart = () => {};
 function bind(screen){
   if (screen==="home"){
     const nameOk = () => { const n=$("#name").value.trim(); if(!n){ $("#msg").textContent="Escribe tu nombre primero."; return false; } S.myName=n; store.set("nac-name", n); return true; };
@@ -544,6 +568,7 @@ function bind(screen){
     $("#code").onkeydown = e => { if(e.key==="Enter") $("#join").click(); };
   }
   if (screen==="lobby"){
+    const rb=$("#ready"); if (rb) rb.onclick = () => { const me=S.view.players.find(p=>p.id===S.myId)||{}; net.send({t:"ready", v:!me.ready}); };
     $("#copy").onclick = () => { const i=$("#link"); i.select(); (navigator.clipboard?navigator.clipboard.writeText(i.value):Promise.reject()).catch(()=>document.execCommand("copy")); $("#copy").textContent="¡Copiado!"; };
     if (S.role==="host"){
       const save = () => {
@@ -553,7 +578,8 @@ function bind(screen){
         const L = $("#letters").value.toUpperCase().replace(/[^A-ZÑ]/g,""); H.settings.letters = L || DEFAULT_LETTERS;
       };
       ["#cats","#secs","#mode","#pen","#letters"].forEach(id => $(id).onchange = () => { save(); const pub=hostPublic(); Object.values(H.players).forEach(p=>{ if(p.conn&&p.online) net.send(p.conn,{t:"state",s:pub}); }); });
-      $("#start").onclick = () => { save(); hostNewRound(); };
+      bindStart = () => { $("#start").onclick = () => { save(); hostNewRound(); }; };
+      bindStart();
     }
   }
   if (screen==="playing"){

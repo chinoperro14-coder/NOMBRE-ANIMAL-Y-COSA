@@ -19,5 +19,6 @@ Nombre, Apellido, Animal, Cosa, Color, Fruta, País, Marca, Almacén y TV (el an
 ## Archivos
 - `index.html`: el juego completo.
 - `palabras.js`: listas de palabras del verificador. Agrega palabras separadas por comas.
+- `peerjs.min.js`: copia local de PeerJS 1.5.4 (licencia MIT) para conectar a los jugadores.
 
 Para probar solo en tu computadora con varias pestañas: abre `index.html?modo=local`.

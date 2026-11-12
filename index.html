@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Nombre, Animal y Cosa</title>
-<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="peerjs.min.js"></script><!-- PeerJS 1.5.4 (MIT), copia local -->
 <script src="palabras.js"></script>
 <style>
 :root{
@@ -93,6 +93,8 @@ const VERIFICADOR_URL = params.get("verificador") || "";
 
 /* ============ Transporte (PeerJS en línea, BroadcastChannel en modo local) ============ */
 const PREFIX = "nombre-animal-cosa-v1-";
+// Solo para pruebas: ?peerhost=localhost:9000 usa un servidor de salas propio en vez del público de PeerJS.
+const PEER_OPTS = (() => { const v=params.get("peerhost"); if(!v) return {}; const [host,port]=v.split(":"); return {host, port:+port||9000, path:"/", secure:false}; })();
 function hostTransport(code, h){
   if (LOCAL){
     const bc = new BroadcastChannel(PREFIX+code);
@@ -101,16 +103,47 @@ function hostTransport(code, h){
     return { send:(to,msg)=>bc.postMessage({to,msg}), close:()=>bc.close() };
   }
   if (!window.Peer){ setTimeout(()=>h.onError("No se pudo cargar la conexión (PeerJS). Revisa tu internet."),0); return {send(){},close(){}}; }
-  const peer = new Peer(PREFIX+code);
   const conns = new Map();
-  peer.on("open", h.onReady);
-  peer.on("error", e => h.onError(e.type==="unavailable-id" ? "Ese código de sala ya está en uso." : "Error de conexión: "+e.type));
-  peer.on("connection", c => {
-    c.on("open", () => { conns.set(c.peer, c); h.onConnect(c.peer); });
-    c.on("data", msg => h.onMessage(c.peer, msg));
-    c.on("close", () => { conns.delete(c.peer); h.onDisconnect && h.onDisconnect(c.peer); });
-  });
-  return { send:(to,msg)=>{ const c=conns.get(to); if(c&&c.open) c.send(msg); }, close:()=>peer.destroy() };
+  let peer = null, opened = false, tries = 0;
+  const attach = () => {
+    peer = new Peer(PREFIX+code, {debug:0, ...PEER_OPTS});
+    peer.on("open", () => { opened = true; tries = 0; h.onReady(); });
+    peer.on("disconnected", () => { // el servidor de señales cortó: reconectar sin perder a los jugadores ya conectados
+      if (!peer.destroyed) setTimeout(() => { try { peer.reconnect(); } catch(e){} }, 1500);
+    });
+    peer.on("error", e => {
+      const fatalBeforeOpen = ["server-error","socket-error","socket-closed","network","unavailable-id","browser-incompatible","ssl-unavailable"];
+      if (!opened && fatalBeforeOpen.includes(e.type) && tries < 3){
+        tries++; try { peer.destroy(); } catch(_){}
+        if (e.type==="unavailable-id"){ code = rid(5); S.code = code; }
+        setTimeout(attach, 1000*tries);                       // reintenta 1 s, 2 s, 3 s
+        return;
+      }
+      if (e.type==="peer-unavailable") return;                // no afecta al anfitrión
+      if (!opened) h.onError(errorText(e.type));
+    });
+    peer.on("connection", c => {
+      c.on("open", () => { conns.set(c.peer, c); h.onConnect(c.peer); });
+      c.on("data", msg => { if (msg && typeof msg==="object") h.onMessage(c.peer, msg); });
+      c.on("close", () => { conns.delete(c.peer); h.onDisconnect && h.onDisconnect(c.peer); });
+      c.on("error", () => {});
+    });
+  };
+  attach();
+  return { send:(to,msg)=>{ const c=conns.get(to); if(c&&c.open) c.send(msg); }, close:()=>peer&&peer.destroy() };
+}
+function errorText(type){
+  return ({
+    "browser-incompatible":"Tu navegador no permite este juego. Prueba con Chrome, Safari o Firefox actualizados.",
+    "network":"No hay conexión con el servidor de salas. Revisa tu internet y vuelve a intentar.",
+    "server-error":"El servidor de salas no respondió. Espera un momento y vuelve a intentar.",
+    "socket-error":"Se cortó la conexión con el servidor de salas. Vuelve a intentar.",
+    "socket-closed":"Se cortó la conexión con el servidor de salas. Vuelve a intentar.",
+    "ssl-unavailable":"La página debe abrirse con https://.",
+    "unavailable-id":"No se pudo reservar un código de sala. Vuelve a intentar.",
+    "peer-unavailable":"No existe esa sala o el anfitrión cerró el juego. Revisa el código.",
+    "webrtc":"Tu conexión no permitió unirte (red o firewall). Prueba con otra red, por ejemplo datos móviles.",
+  })[type] || ("Error de conexión ("+type+"). Vuelve a intentar.");
 }
 function clientTransport(code, h){
   if (LOCAL){
@@ -121,15 +154,24 @@ function clientTransport(code, h){
     return { send: msg => bc.postMessage({to:"host", from:me, msg}) };
   }
   if (!window.Peer){ setTimeout(()=>h.onError("No se pudo cargar la conexión (PeerJS). Revisa tu internet."),0); return {send(){}}; }
-  const peer = new Peer();
-  let conn = null;
-  peer.on("open", () => {
-    conn = peer.connect(PREFIX+code, {reliable:true});
-    conn.on("open", h.onReady);
-    conn.on("data", h.onMessage);
-    conn.on("close", () => h.onError("Se perdió la conexión con el anfitrión."));
-  });
-  peer.on("error", e => h.onError(e.type==="peer-unavailable" ? "No existe esa sala o el anfitrión cerró el juego." : "Error de conexión: "+e.type));
+  let conn = null, peer = null, tries = 0, ready = false;
+  const attach = () => {
+    peer = new Peer({debug:0, ...PEER_OPTS});
+    peer.on("open", () => {
+      conn = peer.connect(PREFIX+code, {reliable:true});
+      const t = setTimeout(() => { if (!ready) peer.emit("error", {type:"webrtc"}); }, 15000);
+      conn.on("open", () => { clearTimeout(t); ready = true; tries = 0; h.onReady(); });
+      conn.on("data", msg => { if (msg && typeof msg==="object") h.onMessage(msg); });
+      conn.on("close", () => { if (ready) h.onError("Se perdió la conexión con el anfitrión. Recarga la página para volver a entrar."); });
+    });
+    peer.on("disconnected", () => { if (!peer.destroyed && !ready) setTimeout(() => { try { peer.reconnect(); } catch(e){} }, 1500); });
+    peer.on("error", e => {
+      if (ready) return;
+      if (tries < 3 && e.type!=="browser-incompatible"){ tries++; try{ peer.destroy(); }catch(_){} setTimeout(attach, 1500*tries); return; }
+      h.onError(errorText(e.type));
+    });
+  };
+  attach();
   return { send: msg => { if(conn && conn.open) conn.send(msg); } };
 }
 
@@ -314,19 +356,21 @@ function hostStart(){
 }
 function hostHandle(conn, msg){
   if (msg.t==="hello"){
-    let pid = msg.pid && H.players[msg.pid] ? msg.pid : null;
+    // Solo se recupera un jugador anterior con su clave secreta (evita que alguien se haga pasar por otro).
+    const known = typeof msg.pid==="string" && msg.pid!=="host" && Object.prototype.hasOwnProperty.call(H.players, msg.pid);
+    let pid = known && typeof msg.token==="string" && H.players[msg.pid].token===msg.token ? msg.pid : null;
     if (!pid){
-      if (H.phase!=="lobby" && H.phase!=="review"){ /* se permite entrar a mitad: jugará desde la siguiente ronda */ }
-      pid = msg.pid || ("p-"+rid(6));
-      H.players[pid] = {name: String(msg.name||"Jugador").slice(0,24)};
+      if (H.order.length >= 20){ net.send(conn, {t:"full"}); return; }
+      pid = "p-"+rid(8);
+      H.players[pid] = {name: String(msg.name||"Jugador").trim().slice(0,24) || "Jugador", token: rid(16)};
       H.order.push(pid);
     }
     H.players[pid].online = true; H.players[pid].conn = conn; H.connOf[conn]=pid;
-    if (msg.name) H.players[pid].name = String(msg.name).slice(0,24);
-    net.send(conn, {t:"welcome", pid});
+    if (typeof msg.name==="string" && msg.name.trim()) H.players[pid].name = msg.name.trim().slice(0,24);
+    net.send(conn, {t:"welcome", pid, token:H.players[pid].token});
     hostBroadcast(); return;
   }
-  const pid = H.connOf[conn]; if (!pid) return;
+  const pid = Object.prototype.hasOwnProperty.call(H.connOf, conn) ? H.connOf[conn] : null; if (!pid) return;
   hostAction(pid, msg);
 }
 function hostAction(pid, msg){
@@ -401,7 +445,7 @@ async function verifyWithAI(r){
   hostBroadcast();
 }
 function hostVote(voter, owner, cat, v){
-  const r = H.rounds[H.rounds.length-1]; if(!r || voter===owner || !r.players.includes(voter) || !r.cats.includes(cat)) return;
+  const r = H.rounds[H.rounds.length-1]; if(!r || voter===owner || !r.players.includes(voter) || !r.players.includes(owner) || !r.cats.includes(cat)) return;
   const k = owner+"|"+cat; r.votes[k] = r.votes[k] || {};
   if (v===1 || v===-1) r.votes[k][voter]=v; else delete r.votes[k][voter];
   hostBroadcast();
@@ -430,18 +474,34 @@ function hostBroadcast(){
 /* ---------- Lógica del JUGADOR ---------- */
 function clientJoin(code){
   S.role="client"; S.code=code.toUpperCase().trim(); S.error="";
-  const savedPid = LOCAL ? null : store.get("nac-pid-"+S.code);
+  const savedPid = LOCAL ? null : store.get("nac-pid-"+S.code), savedToken = LOCAL ? null : store.get("nac-tok-"+S.code);
   net = clientTransport(S.code, {
-    onReady(){ net.send({t:"hello", name:S.myName, pid:savedPid}); },
+    onReady(){ net.send({t:"hello", name:S.myName, pid:savedPid, token:savedToken}); },
     onError(m){ S.error=m; render(); },
     onMessage(msg){
-      if (msg.t==="welcome"){ S.myId=msg.pid; store.set("nac-pid-"+S.code, msg.pid); }
+      if (msg.t==="welcome"){ S.myId=String(msg.pid); store.set("nac-pid-"+S.code, S.myId); store.set("nac-tok-"+S.code, String(msg.token||"")); }
+      if (msg.t==="full"){ S.error="La sala está llena (máximo 20 jugadores)."; render(); return; }
       if (msg.t==="state") receiveState(msg.s);
     },
   });
   render();
 }
+// Lo que manda el anfitrión no es de confianza: los campos numéricos y de sí/no se convierten
+// a su tipo para que nunca se inserte texto inesperado en la página.
+const NUM_KEYS = new Set(["seconds","roundNo","startIn","remaining","total","pts","count","up","down","left"]);
+const BOOL_KEYS = new Set(["penalize","bastaNeedsAll","ready","online","ai","valida"]);
+function cleanState(x, depth){
+  if (depth>8 || x===null || typeof x!=="object") return x;
+  const out = Array.isArray(x) ? [] : Object.create(null);
+  for (const k of Object.keys(x)){
+    if (k==="__proto__" || k==="constructor" || k==="prototype") continue;
+    const v = x[k];
+    out[k] = NUM_KEYS.has(k) ? (Number(v)||0) : BOOL_KEYS.has(k) ? !!v : (typeof v==="object" ? cleanState(v, depth+1) : (v===undefined||typeof v==="number"||typeof v==="boolean" ? v : String(v)));
+  }
+  return out;
+}
 function receiveState(s){
+  if (S.role==="client") s = cleanState(s, 0);
   const prev = S.view;
   S.view = s;
   if (s.phase==="countdown") S.startAt = Date.now() + s.startIn;

@@ -331,7 +331,7 @@ function hostHandle(conn, msg){
 }
 function hostAction(pid, msg){
   if (msg.t==="ready" && H.phase==="lobby"){ H.players[pid].ready = !!msg.v; hostBroadcast(); return; }
-  if (msg.t==="start" && (H.phase==="lobby" || H.phase==="review")){ hostNewRound(); return; }
+  if (msg.t==="start"){ hostRequestStart(msg.round); return; }
   if (msg.t==="answers" && H.cur && (H.phase==="playing"||H.phase==="closing")){
     H.cur.answers[pid] = sanitizeAnswers(msg.a);
   } else if (msg.t==="basta" && H.phase==="playing"){
@@ -344,6 +344,13 @@ function hostAction(pid, msg){
   }
 }
 function sanitizeAnswers(a){ const o={}; (H.cur?H.cur.cats:[]).forEach(c=>{ o[c]=String((a||{})[c]||"").slice(0,40) }); return o; }
+// Solo se acepta UNA petición de nueva ronda: la primera que llega gana. Las demás (dos jugadores
+// tocando a la vez, doble toque, o un mensaje atrasado de una ronda anterior) se ignoran.
+function hostRequestStart(round){
+  if (H.phase!=="lobby" && H.phase!=="review") return false;
+  if (typeof round==="number" && round!==H.rounds.length) return false;
+  hostNewRound(); return true;
+}
 function hostNewRound(){
   const pool = H.settings.letters.toUpperCase().replace(/[^A-ZÑ]/g,"").split("");
   let avail = pool.filter(l=>!H.usedLetters.includes(l));
@@ -669,7 +676,7 @@ function bind(screen){
   }
   if (screen==="lobby"){
     const rb=$("#ready"); if (rb) rb.onclick = () => { const me=S.view.players.find(p=>p.id===S.myId)||{}; net.send({t:"ready", v:!me.ready}); };
-    if (S.role!=="host"){ const sb=$("#start"); if (sb) sb.onclick = () => { sb.disabled=true; net.send({t:"start"}); }; }
+    if (S.role!=="host"){ const sb=$("#start"); if (sb) sb.onclick = () => { sb.disabled=true; net.send({t:"start", round:S.view.roundNo||0}); }; }
     $("#copy").onclick = () => { const i=$("#link"); i.select(); (navigator.clipboard?navigator.clipboard.writeText(i.value):Promise.reject()).catch(()=>document.execCommand("copy")); $("#copy").textContent="¡Copiado!"; };
     if (S.role==="host"){
       const save = () => {
@@ -679,7 +686,7 @@ function bind(screen){
         const L = $("#letters").value.toUpperCase().replace(/[^A-ZÑ]/g,""); H.settings.letters = L || DEFAULT_LETTERS;
       };
       ["#cats","#secs","#mode","#bnall","#pen","#letters"].forEach(id => $(id).onchange = () => { save(); const pub=hostPublic(); Object.values(H.players).forEach(p=>{ if(p.conn&&p.online) net.send(p.conn,{t:"state",s:pub}); }); });
-      bindStart = () => { $("#start").onclick = () => { save(); hostNewRound(); }; };
+      bindStart = () => { $("#start").onclick = () => { save(); hostRequestStart(H.rounds.length); }; };
       bindStart();
     }
   }
@@ -696,9 +703,9 @@ function bind(screen){
       const v = b.classList.contains("on") ? 0 : +b.dataset.v;
       if (S.role==="host") hostVote("host", b.dataset.p, b.dataset.c, v); else net.send({t:"vote", p:b.dataset.p, c:b.dataset.c, v});
     });
-    if (S.role!=="host"){ const n=$("#next"); if(n) n.onclick = () => { n.disabled=true; net.send({t:"start"}); }; }
+    if (S.role!=="host"){ const n=$("#next"); if(n) n.onclick = () => { n.disabled=true; net.send({t:"start", round:S.view.roundNo||0}); }; }
     if (S.role==="host"){
-      const n=$("#next"); if(n) n.onclick = hostNewRound;
+      const n=$("#next"); if(n) n.onclick = () => { n.disabled=true; hostRequestStart(H.rounds.length); };
       const l=$("#lobbyBtn"); if(l) l.onclick = () => { H.phase="lobby"; hostBroadcast(); };
       const e=$("#end"); if(e) e.onclick = () => { H.phase="final"; hostBroadcast(); };
       const a=$("#again"); if(a) a.onclick = () => { H.rounds=[]; H.usedLetters=[]; H.cur=null; H.phase="lobby"; hostBroadcast(); };
